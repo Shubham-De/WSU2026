@@ -20,6 +20,7 @@ An EventBridge rule runs the function **every 5 minutes**.
 | `lambda/hello.py` | Hello Lambda warm-up function |
 | `lambda/monitor.py` | Website monitor function |
 | `lambda/websites.json` | List of websites to check |
+| `lambda/alarm_logger.py`|
 | `RUNBOOK.md` | What to do when an alarm fires |
 
 ## Prerequisites
@@ -50,6 +51,32 @@ The stack is deployed to **us-east-1 (N. Virginia)**.
 | Dashboard | `WebHealth` (availability and latency graphs for each site) |
 | Availability alarm | Triggers when availability drops below 1 |
 | Latency alarm | Triggers when latency is above 3000 ms for 2 checks in a row |
+
+
+### Notifications and alarm history
+
+When an alarm changes state, it publishes to an **SNS topic**, which:
+
+1. Sends an **email** to the address set as `alert_email` in `shubham/shubham_stack.py`
+2. Triggers the `AlarmLogger` Lambda, which saves the event in a **DynamoDB** table
+
+| Field | Meaning |
+| ----------- | ----------- |
+| `alarm_name` | Which alarm changed |
+| `timestamp` | When it changed |
+| `new_state` | `ALARM` or `OK` |
+| `old_state` | The previous state |
+| `reason` | Why CloudWatch changed the state |
+
+To view the history, open DynamoDB in the AWS Console, then Tables, then the `AlarmLogTable`, then Explore table items.
+
+### Testing notifications
+
+Force an alarm into the ALARM state:
+
+```bash
+aws cloudwatch set-alarm-state --alarm-name "<alarm name>" --state-value ALARM --state-reason "Testing notifications"
+```
 
 ### Adding a website
 
@@ -86,7 +113,8 @@ The dashboard and alarms are created for the new site automatically.
 - [x] Send metrics to CloudWatch with boto3
 - [x] CloudWatch dashboard
 - [x] Availability and latency alarms
-- [ ] Alarm notifications (email through SNS)
+- [x] Alarm notifications (email through SNS)
+- [x] Alarm history logged in DynamoDB
 
 ## Runbook
 

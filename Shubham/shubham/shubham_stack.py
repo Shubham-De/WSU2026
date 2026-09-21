@@ -11,8 +11,16 @@ from aws_cdk import (
     aws_events_targets as targets,
     aws_iam as iam,
     aws_cloudwatch as cloudwatch,
+    RemovalPolicy,
+    aws_cloudwatch_actions as cw_actions,
+    aws_sns as sns,
+    aws_sns_subscriptions as subs,
+    aws_dynamodb as dynamodb,
+
 )
 from constructs import Construct
+
+alert_email = "bhattaraishubham817@gmail.com"
 
 class ShubhamStack(Stack):
 
@@ -59,6 +67,37 @@ class ShubhamStack(Stack):
         )
         rule.add_target(targets.LambdaFunction(monitor))
 
+        topic = sns.Topic(self, "AlarmTopic", display_name="WebHealth Alarms")
+        
+                
+        topic.add_subscription(subs.EmailSubscription(alert_email))
+
+        table = dynamodb.Table(
+            self, "AlarmLogTable",
+            partition_key=dynamodb.Attribute(
+                name="alarm_name", type=dynamodb.AttributeType.STRING
+            ),
+            sort_key=dynamodb.Attribute(
+                name="timestamp", type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,   # pay only for what you use
+            removal_policy=RemovalPolicy.DESTROY,                # cdk destroy also deletes the table
+        )
+
+
+
+        # saving alarm messages into the table (logger lambda)
+        logger = _lambda.Function(
+            self, "AlarmLogger",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="alarm_logger.handler",
+            code=_lambda.Code.from_asset("lambda"),
+            environment={"TABLE_NAME": table.table_name},   # tells the code which table to use
+        )
+
+        table.grant_write_data(logger)                       #  allow writing to the table
+        topic.add_subscription(subs.LambdaSubscription(logger))     # the logger also listens to the group chat
+
         
         # points at one metric for one website
         def site_metric(metric_name, site_name):
@@ -88,13 +127,18 @@ class ShubhamStack(Stack):
         )
 
 
+
+
+
+
+
         
         # Two alarms for every website
         for site in websites:
             name = site["name"]
 
             # Alarm 1 when the site is down
-            cloudwatch.Alarm(
+            down_alarm = cloudwatch.Alarm(
                 self, f"{name}AvailabilityAlarm",
                 alarm_description=f"{name} is down",
                 metric=site_metric("Availability", name),
@@ -105,7 +149,7 @@ class ShubhamStack(Stack):
             )
 
             # Alarm 2 when the site is slow over 3000 ms && twice in a row
-            cloudwatch.Alarm(
+            slow_alarm = cloudwatch.Alarm(
                 self, f"{name}LatencyAlarm",
                 alarm_description=f"{name} is slow",
                 metric=site_metric("Latency", name),
@@ -114,3 +158,12 @@ class ShubhamStack(Stack):
                 evaluation_periods=2,
                 treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             )
+
+
+            for alarm in (down_alarm, slow_alarm):
+                alarm.add_alarm_action(cw_actions.SnsAction(topic))   # alarm
+                alarm.add_ok_action(cw_actions.SnsAction(topic))      #ok
+            
+
+
+

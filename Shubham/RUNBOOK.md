@@ -42,3 +42,9 @@ cdk deploy
 
 1. Edit `lambda/websites.json`.
 2. Run `cdk deploy`. The dashboard and alarms update automatically.
+
+## Checking alarm history
+
+1. Open DynamoDB in the AWS Console and go to Tables.
+2. Open `ShubhamStack-AlarmLogTable...` and click Explore table items.
+3. Look at `new_state` and `timestamp` to see when the site broke and when it recovered.
