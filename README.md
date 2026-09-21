@@ -1,68 +1,72 @@
-# DevOps Course Project – AWS DevOps Web Crawler
+# Website Monitor with AWS CDK and Lambda
 
-## Project Overview
+A small serverless project that checks whether a website is up and how fast it responds. It is built with the AWS CDK (Python) and runs as an AWS Lambda function.
 
-In this project, students will use Infrastructure as Code (IaC) principles to build and operate a cloud-native web application across AWS environments.
+## What it does
 
-The project focuses on:
+The `WebMonitor` Lambda function visits a website and reports:
 
-- Building a RESTful Python application on AWS
-- Using AWS Cloud Development Kit (CDK) for infrastructure deployment
-- Managing source code with GitHub
-- Implementing CI/CD pipelines for automated deployments
-- Writing automated unit and integration tests
-- Monitoring applications using CloudWatch
-- Automating rollback procedures based on operational metrics
-- Deploying and managing serverless applications using AWS services
+- **is_up**: whether the site responded successfully
+- **status_code**: the HTTP status code (200 means OK)
+- **response_time_ms**: how long the request took, in milliseconds
 
-### Technologies Used
+The monitored site is `https://www.westernsydney.edu.au/`.
 
-- AWS CDK
-- AWS Lambda
-- Amazon CloudWatch
-- Amazon DynamoDB
-- Amazon API Gateway
-- Amazon SNS
-- Amazon S3
-- AWS CodePipeline
-- AWS CodeDeploy
-- AWS Cloud9
-- GitHub
-- Python
+## Project structure
 
----
+| Path | Purpose |
+|------|---------|
+| `app.py` | Entry point for the CDK app |
+| `shubham/shubham_stack.py` | Defines the AWS resources (two Lambda functions) |
+| `lambda/hello.py` | Hello Lambda warm-up function |
+| `lambda/monitor.py` | Website monitor function |
 
-# Weekly Project Plan
+## Prerequisites
 
-## Week 1 – Project Setup
+- Python 3
+- Node.js
+- AWS CLI, configured with `aws configure`
+- AWS CDK: `npm install -g aws-cdk`
 
-### Activities
+## Setup and deploy
 
-- Introduction to the project
-- AWS CDK setup
-- GitHub account and dashboard setup
-- Repository cloning and environment preparation
+```bash
+cd Shubham
+python -m venv .venv          # only if .venv doesn't exist yet
+.venv\Scripts\activate        # Windows
+python -m pip install -r requirements.txt
+cdk bootstrap                 # once per account and region
+cdk deploy
+```
 
-### Learning Objectives
+The stack is deployed to **us-east-1 (N. Virginia)**.
 
-- Understand project requirements and architecture
-- Configure development tools
-- Set up source control workflows using GitHub
+## Testing
 
----
+1. Open the AWS Console and go to **Lambda**, then open the function whose name starts with `ShubhamStack-WebMonitor`.
+2. Open the **Test** tab and run it with the default `{}` event.
 
+### Sample output
 
+```json
+{
+  "url": "https://www.westernsydney.edu.au/",
+  "is_up": true,
+  "status_code": 200,
+  "response_time_ms": 791
+}
+```
 
-# Overall Expected Learning Outcomes
+## Clean up
 
-By the end of this project, students will be able to:
+To remove everything from AWS:
 
-- Apply DevOps practices in real-world cloud environments
-- Use Infrastructure as Code with AWS CDK
-- Develop serverless applications using AWS Lambda
-- Build automated CI/CD pipelines
-- Implement monitoring, alerting, and operational dashboards
-- Write and execute automated tests
-- Design and deploy RESTful APIs
-- Manage cloud infrastructure and applications using GitHub and AWS services
-- Implement automated rollback and reliability mechanisms
+```bash
+cdk destroy
+```
+
+## What I learned
+
+- Infrastructure as Code: defining AWS resources in Python instead of clicking in the console
+- How Lambda functions, handlers and IAM execution roles fit together
+- Using Git and GitHub to version the project
