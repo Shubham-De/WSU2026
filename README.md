@@ -1,6 +1,6 @@
-# Website Monitor with AWS CDK and Lambda
+# Website Monitor with AWS CDK, Lambda and CI/CD
 
-A small serverless project that checks whether websites are up and how fast they respond. It is built with the AWS CDK (Python), runs as an AWS Lambda function every 5 minutes, and sends its results to CloudWatch, where they appear on a dashboard and trigger alarms.
+A small serverless project that checks whether websites are up and how fast they respond. It is built with the AWS CDK (Python), runs as an AWS Lambda function every 5 minutes, and sends its results to CloudWatch, where they appear on a dashboard and trigger alarms. Changes are deployed through a CI/CD pipeline with separate **Beta** and **Prod** environments.
 
 ## What it does
 
@@ -11,16 +11,37 @@ The `WebMonitor` Lambda function reads a list of websites from `lambda/websites.
 
 An EventBridge rule runs the function **every 5 minutes**.
 
+## CI/CD pipeline
+
+Code pushed to the `main` branch on GitHub triggers an AWS CodePipeline (`WebHealthPipeline`) that:
+
+1. **Source** — pulls the latest commit from GitHub
+2. **Build** — installs dependencies and runs `cdk synth`
+3. **UpdatePipeline** — lets the pipeline update its own definition if it changed
+4. **Beta** — deploys a full, independent copy of the stack for testing
+5. **PromoteToProd** — pauses for manual approval in the AWS Console
+6. **Prod** — deploys the same stack to the production environment, once approved
+
+Beta and Prod each get their own complete set of resources — Lambdas, dashboard, alarms, SNS topic and DynamoDB table — so changes can be verified in Beta before they reach Prod.
+
+```
+GitHub push → Source → Build (Synth) → Beta → Manual approval → Prod
+```
+
+To set this up from scratch, see [Pipeline setup](#pipeline-setup) below.
+
 ## Project structure
 
 | Path | Purpose |
 |------|---------|
-| `app.py` | Entry point for the CDK app |
-| `shubham/shubham_stack.py` | Defines the AWS resources (Lambdas, schedule, dashboard, alarms) |
+| `app.py` | Entry point for the CDK app — defines the pipeline stack |
+| `shubham/pipeline_stack.py` | Defines the CodePipeline: source, build, Beta and Prod stages |
+| `shubham/app_stage.py` | Wraps `ShubhamStack` so it can be deployed once per environment (Beta, Prod) |
+| `shubham/shubham_stack.py` | Defines the AWS resources (Lambdas, schedule, dashboard, alarms, SNS, DynamoDB) |
 | `lambda/hello.py` | Hello Lambda warm-up function |
 | `lambda/monitor.py` | Website monitor function |
+| `lambda/alarm_logger.py` | Saves alarm events into DynamoDB |
 | `lambda/websites.json` | List of websites to check |
-| `lambda/alarm_logger.py`|
 | `RUNBOOK.md` | What to do when an alarm fires |
 
 ## Prerequisites
@@ -29,8 +50,14 @@ An EventBridge rule runs the function **every 5 minutes**.
 - Node.js
 - AWS CLI, configured with `aws configure`
 - AWS CDK: `npm install -g aws-cdk`
+- A GitHub personal access token with `repo` scope, stored in AWS Secrets Manager under the name `github-token`:
+```bash
+  aws secretsmanager create-secret --name github-token --secret-string "<your token>"
+```
 
-## Setup and deploy
+## Pipeline setup
+
+The pipeline itself only needs to be deployed once, by hand. After that, every push to `main` deploys automatically.
 
 ```bash
 cd Shubham
@@ -38,20 +65,29 @@ python -m venv .venv          # only if .venv doesn't exist yet
 .venv\Scripts\activate        # Windows
 python -m pip install -r requirements.txt
 cdk bootstrap                 # once per account and region
-cdk deploy
+cdk deploy WebHealthPipelineStack
 ```
 
-The stack is deployed to **us-east-1 (N. Virginia)**.
+The pipeline and both environments (Beta, Prod) are deployed to **us-east-1 (N. Virginia)**.
+
+After the first deploy, push to `main` to trigger the pipeline's first real run:
+
+```bash
+git add .
+git commit -m "Trigger pipeline"
+git push
+```
+
+Watch it run in the AWS Console under **CodePipeline → Pipelines → WebHealthPipeline**. When it reaches **PromoteToProd**, click **Review → Approve** to let it continue to Prod.
 
 ## Monitoring
 
 | Component | Details |
 |-----------|---------|
 | Metrics namespace | `WebHealth` |
-| Dashboard | `WebHealth` (availability and latency graphs for each site) |
+| Dashboard | `WebHealth-<stack name>` (availability and latency graphs for each site) — a separate dashboard per environment |
 | Availability alarm | Triggers when availability drops below 1 |
 | Latency alarm | Triggers when latency is above 3000 ms for 2 checks in a row |
-
 
 ### Notifications and alarm history
 
@@ -59,6 +95,8 @@ When an alarm changes state, it publishes to an **SNS topic**, which:
 
 1. Sends an **email** to the address set as `alert_email` in `shubham/shubham_stack.py`
 2. Triggers the `AlarmLogger` Lambda, which saves the event in a **DynamoDB** table
+
+Each environment (Beta, Prod) has its own topic and table.
 
 | Field | Meaning |
 | ----------- | ----------- |
@@ -68,11 +106,11 @@ When an alarm changes state, it publishes to an **SNS topic**, which:
 | `old_state` | The previous state |
 | `reason` | Why CloudWatch changed the state |
 
-To view the history, open DynamoDB in the AWS Console, then Tables, then the `AlarmLogTable`, then Explore table items.
+To view the history, open DynamoDB in the AWS Console, then Tables, then the relevant `AlarmLogTable`, then Explore table items.
 
 ### Testing notifications
 
-Force an alarm into the ALARM state:
+Force an alarm into the ALARM state (replace with the full alarm name, e.g. one prefixed `Prod-ShubhamStack-...`):
 
 ```bash
 aws cloudwatch set-alarm-state --alarm-name "<alarm name>" --state-value ALARM --state-reason "Testing notifications"
@@ -80,18 +118,19 @@ aws cloudwatch set-alarm-state --alarm-name "<alarm name>" --state-value ALARM -
 
 ### Adding a website
 
-Add an entry to `lambda/websites.json`, then run `cdk deploy`:
+Add an entry to `lambda/websites.json`, commit and push:
 
 ```json
 { "name": "Example", "url": "https://example.com/" }
 ```
 
-The dashboard and alarms are created for the new site automatically.
+The pipeline deploys the change to Beta, then Prod (after approval), and the dashboard and alarms are created for the new site automatically in both.
 
-## Testing
+## Testing the monitor
 
-1. Open the AWS Console and go to **Lambda**, then open the function whose name starts with `ShubhamStack-WebMonitor`.
-2. Open the **Test** tab and run it with the default `{}` event.
+1. Open the AWS Console and go to **Lambda**.
+2. Open the function whose name starts with `Prod-ShubhamStack-WebMonitor` (or `Beta-ShubhamStack-WebMonitor` to test the staging copy).
+3. Open the **Test** tab and run it with the default `{}` event.
 
 ### Sample output
 
@@ -115,6 +154,10 @@ The dashboard and alarms are created for the new site automatically.
 - [x] Availability and latency alarms
 - [x] Alarm notifications (email through SNS)
 - [x] Alarm history logged in DynamoDB
+- [x] CI/CD pipeline with Beta and Prod stages
+- [ ] Automated test suite (unit, functional, integration)
+- [ ] Operational Lambda metrics and automated rollback
+- [ ] CRUD API Gateway for the website target list
 
 ## Runbook
 
@@ -122,10 +165,17 @@ See [RUNBOOK.md](RUNBOOK.md) for how to respond to alarms.
 
 ## Clean up
 
-To remove everything from AWS:
+To remove an environment, delete its stack directly (the pipeline will redeploy it on the next push):
 
 ```bash
-cdk destroy
+aws cloudformation delete-stack --stack-name Beta-ShubhamStack --region us-east-1
+aws cloudformation delete-stack --stack-name Prod-ShubhamStack --region us-east-1
+```
+
+To remove the pipeline itself:
+
+```bash
+cdk destroy WebHealthPipelineStack
 ```
 
 ## What I learned
@@ -134,4 +184,7 @@ cdk destroy
 - How Lambda functions, handlers and IAM execution roles fit together
 - Writing custom metrics to CloudWatch with boto3
 - Scheduling with EventBridge, and building dashboards and alarms in CDK
+- Publishing alarm events through SNS, and logging them to DynamoDB
+- Building a multi-stage CI/CD pipeline with AWS CDK Pipelines, including a Beta environment, manual approval, and a Prod environment
+- Why CloudFormation resources with fixed names (like a dashboard name) collide across stacks, and how changing a construct's logical ID forces a clean replacement
 - Using Git and GitHub to version the project
