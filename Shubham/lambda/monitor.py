@@ -12,6 +12,12 @@ import boto3
 cloudwatch = boto3.client("cloudwatch")
 
 
+def load_websites():
+    """Read the list of websites to check from websites.json."""
+    with open("websites.json") as f:
+        return json.load(f)
+
+"""  
 def check_website(url):   #Visit one website. Returns is_up, response_time_in_ms
     
     start = time.time()
@@ -20,6 +26,22 @@ def check_website(url):   #Visit one website. Returns is_up, response_time_in_ms
         is_up = response.status == 200
     except Exception:
         is_up = False   
+    latency_ms = round((time.time() - start) * 1000)
+    return is_up, latency_ms
+"""
+
+def check_website(url):   # Visit one website. Returns is_up, response_time_in_ms
+    start = time.time()
+    try:
+        # Identify ourselves, so sites don't block us as an anonymous bot
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "WebHealthMonitor/1.0 (student project)"},
+        )
+        response = urllib.request.urlopen(request, timeout=10)
+        is_up = response.status == 200
+    except Exception:
+        is_up = False
     latency_ms = round((time.time() - start) * 1000)
     return is_up, latency_ms
 
@@ -52,9 +74,10 @@ def handler(event, context):
 
 def handler(event, context):
     # open list of websites from the json  file
-    with open("websites.json") as f:
-        websites = json.load(f)
+    #with open("websites.json") as f:
+    #    websites = json.load(f)
 
+    websites = load_websites()
     results = []
 
     # check websites one at a time
