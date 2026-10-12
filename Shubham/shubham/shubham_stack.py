@@ -60,6 +60,9 @@ class ShubhamStack(Stack):
             resources=["*"],
         ))
 
+
+        
+
         #monitor every 5 mins
         rule = events.Rule(
             self, "MonitorSchedule",
@@ -137,6 +140,51 @@ class ShubhamStack(Stack):
 
 
 
+                # Operational health alarms for the WebMonitor Lambda itself 
+        webmonitor_duration_alarm = cloudwatch.Alarm(
+            self, "WebMonitorDurationAlarm",
+            alarm_description="WebMonitor is taking too long to run",
+            metric=monitor.metric_duration(statistic="Average", period=Duration.minutes(5)),
+            threshold=50000,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+            evaluation_periods=2,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+
+        webmonitor_errors_alarm = cloudwatch.Alarm(
+            self, "WebMonitorErrorsAlarm",
+            alarm_description="WebMonitor is throwing errors",
+            metric=monitor.metric_errors(statistic="Sum", period=Duration.minutes(5)),
+            threshold=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            evaluation_periods=1,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+
+        webmonitor_throttles_alarm = cloudwatch.Alarm(
+            self, "WebMonitorThrottlesAlarm",
+            alarm_description="WebMonitor is being throttled",
+            metric=monitor.metric_throttles(statistic="Sum", period=Duration.minutes(5)),
+            threshold=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            evaluation_periods=1,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+
+        webmonitor_invocations_alarm = cloudwatch.Alarm(
+            self, "WebMonitorNoInvocationsAlarm",
+            alarm_description="WebMonitor has not run recently — schedule may be broken",
+            metric=monitor.metric_invocations(statistic="Sum", period=Duration.minutes(10)),
+            threshold=1,
+            comparison_operator=cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+            evaluation_periods=1,
+            treat_missing_data=cloudwatch.TreatMissingData.BREACHING,
+        )
+
+        for alarm in (webmonitor_duration_alarm, webmonitor_errors_alarm,
+                      webmonitor_throttles_alarm, webmonitor_invocations_alarm):
+            alarm.add_alarm_action(cw_actions.SnsAction(topic))
+            alarm.add_ok_action(cw_actions.SnsAction(topic))
 
 
 
