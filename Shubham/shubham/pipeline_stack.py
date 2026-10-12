@@ -27,6 +27,9 @@ class PipelineStack(Stack):
                     "cd Shubham",
                     "python -m pip install --upgrade pip",
                     "python -m pip install -r requirements.txt",
+                    "python -m pip install -r requirements-dev.txt",
+                    "python -m pip install boto3",
+                    "python -m pytest tests/unit tests/functional -v",
                     "npx cdk synth",
                 ],
                 primary_output_directory="Shubham/cdk.out",
@@ -49,7 +52,10 @@ class PipelineStack(Stack):
         )
 
 
+       
         pipeline.add_stage(
             WebHealthStage(self, "Prod"),
-            pre=[pipelines.ManualApprovalStep("PromoteToProd")],
+            pre=[
+                integration_test_step,
+                pipelines.ManualApprovalStep("PromoteToProd"),],
         )
