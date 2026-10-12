@@ -2,6 +2,7 @@ from aws_cdk import (
     Stack,
     SecretValue,
     pipelines,
+    aws_iam as iam,
 )
 from constructs import Construct
 
@@ -39,6 +40,7 @@ class PipelineStack(Stack):
         #beta stage
         pipeline.add_stage(WebHealthStage(self, "Beta"))
 
+"""
         integration_test_step = pipelines.ShellStep(
             "IntegrationTests",
             commands=[
@@ -50,6 +52,30 @@ class PipelineStack(Stack):
                 "python -m pytest tests/integration -v",
             ],
         )
+"""
+
+        integration_test_step = pipelines.CodeBuildStep(
+            "IntegrationTests",
+            commands=[
+                "cd Shubham",
+                "python -m pip install --upgrade pip",
+                "python -m pip install -r requirements.txt",
+                "python -m pip install -r requirements-dev.txt",
+                "python -m pip install boto3",
+                "python -m pytest tests/integration -v",
+            ],
+            role_policy_statements=[
+                iam.PolicyStatement(
+                    actions=["lambda:ListFunctions", "lambda:InvokeFunction"],
+                    resources=["*"],
+                ),
+                iam.PolicyStatement(
+                    actions=["cloudwatch:GetMetricStatistics", "cloudwatch:ListMetrics"],
+                    resources=["*"],
+                ),
+            ],
+        )
+
 
 
        
