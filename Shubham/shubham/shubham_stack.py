@@ -2,9 +2,7 @@ import json
 import os
 
 from aws_cdk import (
-    # Duration,
     Stack,
-    # aws_sqs as sqs,
     aws_lambda as _lambda,
     Duration,
     aws_events as events,
@@ -16,8 +14,7 @@ from aws_cdk import (
     aws_sns as sns,
     aws_sns_subscriptions as subs,
     aws_dynamodb as dynamodb,
-    aws_codedeploy as codedeploy,
-
+    aws_apigateway as apigateway,
 )
 from constructs import Construct
 
@@ -27,14 +24,6 @@ class ShubhamStack(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
-
-        # The code that defines your stack goes here
-
-        # example resource
-        # queue = sqs.Queue(
-        #     self, "ShubhamQueue",
-        #     visibility_timeout=Duration.seconds(300),
-        # )
 
         #read the wesite list
         json_path = os.path.join(os.path.dirname(__file__), "..", "lambda", "websites.json")
@@ -54,7 +43,6 @@ class ShubhamStack(Stack):
             handler="monitor.handler",
             code=_lambda.Code.from_asset("lambda"),
             timeout=Duration.seconds(60),            # 60 bcz more website more time
-            current_version_options=_lambda.VersionOptions(removal_policy=RemovalPolicy.RETAIN,),
         )
 
         monitor.add_to_role_policy(iam.PolicyStatement(
@@ -62,33 +50,14 @@ class ShubhamStack(Stack):
             resources=["*"],
         ))
 
-        # A new immutable version is published every deploy
-        monitor_version = monitor.current_version
-
-        # The alias is the stable name EventBridge actually calls — it points
-        # at whichever version is currently "live"
-
-        monitor_alias = _lambda.Alias(
-            self, "WebMonitorLiveAlias",
-            alias_name="live",
-            version=monitor_version,
-        )
-
-
-        
-
         #monitor every 5 mins
         rule = events.Rule(
             self, "MonitorSchedule",
             schedule=events.Schedule.rate(Duration.minutes(5)),
         )
-
-        #rule.add_target(targets.LambdaFunction(monitor))
-        rule.add_target(targets.LambdaFunction(monitor_alias))
+        rule.add_target(targets.LambdaFunction(monitor))
 
         topic = sns.Topic(self, "AlarmTopic", display_name="WebHealth Alarms")
-        
-                
         topic.add_subscription(subs.EmailSubscription(alert_email))
 
         table = dynamodb.Table(
@@ -99,11 +68,69 @@ class ShubhamStack(Stack):
             sort_key=dynamodb.Attribute(
                 name="timestamp", type=dynamodb.AttributeType.STRING
             ),
-            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,   # pay only for what you use
-            removal_policy=RemovalPolicy.DESTROY,                # cdk destroy also deletes the table
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
         )
 
+        # CRUD API for the website target list
 
+        targets_table = dynamodb.Table(
+            self, "TargetsTable",
+            partition_key=dynamodb.Attribute(
+                name="name", type=dynamodb.AttributeType.STRING
+            ),
+            billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
+
+        create_target_fn = _lambda.Function(
+            self, "CreateTargetFn",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="targets_api.create_target",
+            code=_lambda.Code.from_asset("lambda"),
+            environment={"TARGETS_TABLE_NAME": targets_table.table_name},
+        )
+
+        list_targets_fn = _lambda.Function(
+            self, "ListTargetsFn",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="targets_api.list_targets",
+            code=_lambda.Code.from_asset("lambda"),
+            environment={"TARGETS_TABLE_NAME": targets_table.table_name},
+        )
+
+        update_target_fn = _lambda.Function(
+            self, "UpdateTargetFn",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="targets_api.update_target",
+            code=_lambda.Code.from_asset("lambda"),
+            environment={"TARGETS_TABLE_NAME": targets_table.table_name},
+        )
+
+        delete_target_fn = _lambda.Function(
+            self, "DeleteTargetFn",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="targets_api.delete_target",
+            code=_lambda.Code.from_asset("lambda"),
+            environment={"TARGETS_TABLE_NAME": targets_table.table_name},
+        )
+
+        for fn in (create_target_fn, list_targets_fn, update_target_fn, delete_target_fn):
+            targets_table.grant_read_write_data(fn)
+
+        # API Gateway - wires HTTP routes to the 4 Lambdas above
+        api = apigateway.RestApi(
+            self, "TargetsApi",
+            rest_api_name=f"WebHealth-Targets-{Stack.of(self).stack_name}",
+        )
+
+        targets_resource = api.root.add_resource("targets")
+        targets_resource.add_method("GET", apigateway.LambdaIntegration(list_targets_fn))
+        targets_resource.add_method("POST", apigateway.LambdaIntegration(create_target_fn))
+
+        target_by_name = targets_resource.add_resource("{name}")
+        target_by_name.add_method("PUT", apigateway.LambdaIntegration(update_target_fn))
+        target_by_name.add_method("DELETE", apigateway.LambdaIntegration(delete_target_fn))
 
         # saving alarm messages into the table (logger lambda)
         logger = _lambda.Function(
@@ -111,13 +138,12 @@ class ShubhamStack(Stack):
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="alarm_logger.handler",
             code=_lambda.Code.from_asset("lambda"),
-            environment={"TABLE_NAME": table.table_name},   # tells the code which table to use
+            environment={"TABLE_NAME": table.table_name},
         )
 
-        table.grant_write_data(logger)                       #  allow writing to the table
-        topic.add_subscription(subs.LambdaSubscription(logger))     # the logger also listens to the group chat
+        table.grant_write_data(logger)
+        topic.add_subscription(subs.LambdaSubscription(logger))
 
-        
         # points at one metric for one website
         def site_metric(metric_name, site_name):
             return cloudwatch.Metric(
@@ -128,18 +154,9 @@ class ShubhamStack(Stack):
                 period=Duration.minutes(5),
             )
 
-        # dashboard  two graphs side by side
-        
-        """
-        dashboard = cloudwatch.Dashboard(
-            self, "WebHealthDashboard", dashboard_name="WebHealth"
-        )  
-        """
-
         dashboard = cloudwatch.Dashboard(
             self, "WebHealthDashboardV2", dashboard_name=f"WebHealth-{Stack.of(self).stack_name}"
         )
-        
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="Availability (1 = up, 0 = down)",
@@ -153,10 +170,7 @@ class ShubhamStack(Stack):
             ),
         )
 
-
-
-
-                # Operational health alarms for the WebMonitor Lambda itself 
+        # Operational health alarms for the WebMonitor Lambda itself
         webmonitor_duration_alarm = cloudwatch.Alarm(
             self, "WebMonitorDurationAlarm",
             alarm_description="WebMonitor is taking too long to run",
@@ -203,26 +217,11 @@ class ShubhamStack(Stack):
             alarm.add_ok_action(cw_actions.SnsAction(topic))
 
 
-        # CodeDeploy deployment group  shifts traffic to the new version, watches these alarms, and rolls back automatically if any trip
-        deployment_group = codedeploy.LambdaDeploymentGroup(
-            self, "WebMonitorDeploymentGroup",
-            alias=monitor_alias,
-            deployment_config=codedeploy.LambdaDeploymentConfig.ALL_AT_ONCE,
-            alarms=[
-                webmonitor_duration_alarm,
-                webmonitor_errors_alarm,
-                webmonitor_throttles_alarm,
-            ],
-        )
 
-
-
-        
         # Two alarms for every website
         for site in websites:
             name = site["name"]
 
-            # Alarm 1 when the site is down
             down_alarm = cloudwatch.Alarm(
                 self, f"{name}AvailabilityAlarm",
                 alarm_description=f"{name} is down",
@@ -233,7 +232,6 @@ class ShubhamStack(Stack):
                 treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             )
 
-            # Alarm 2 when the site is slow over 3000 ms && twice in a row
             slow_alarm = cloudwatch.Alarm(
                 self, f"{name}LatencyAlarm",
                 alarm_description=f"{name} is slow",
@@ -244,11 +242,6 @@ class ShubhamStack(Stack):
                 treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
             )
 
-
             for alarm in (down_alarm, slow_alarm):
-                alarm.add_alarm_action(cw_actions.SnsAction(topic))   # alarm
-                alarm.add_ok_action(cw_actions.SnsAction(topic))      #ok
-            
-
-
-
+                alarm.add_alarm_action(cw_actions.SnsAction(topic))
+                alarm.add_ok_action(cw_actions.SnsAction(topic))
