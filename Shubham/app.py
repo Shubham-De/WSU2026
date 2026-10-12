@@ -3,10 +3,17 @@ import os
 
 import aws_cdk as cdk
 
-from shubham.shubham_stack import ShubhamStack
+#from shubham.shubham_stack import ShubhamStack
+from shubham.pipeline_stack import PipelineStack
 
 
 app = cdk.App()
+
+PipelineStack(
+    app, "WebHealthPipelineStack",
+    env=cdk.Environment(account="268335032473", region="us-east-1"),
+)
+"""
 ShubhamStack(app, "ShubhamStack",
     # If you don't specify 'env', this stack will be environment-agnostic.
     # Account/Region-dependent features and context lookups will not work,
@@ -24,5 +31,6 @@ ShubhamStack(app, "ShubhamStack",
 
     # For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html
     )
+"""
 
 app.synth()
