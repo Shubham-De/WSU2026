@@ -1,6 +1,6 @@
-# Website Monitor with AWS CDK, Lambda and CI/CD
+# Website Monitor with AWS CDK, Lambda, API Gateway and CI/CD
 
-A small serverless project that checks whether websites are up and how fast they respond. It is built with the AWS CDK (Python), runs as an AWS Lambda function every 5 minutes, and sends its results to CloudWatch, where they appear on a dashboard and trigger alarms. Changes are deployed through a CI/CD pipeline with separate **Beta** and **Prod** environments, gated by an automated test suite and protected by automatic rollback.
+A serverless project that checks whether websites are up and how fast they respond, built with the AWS CDK (Python). It runs as an AWS Lambda function every 5 minutes, sends results to CloudWatch, and triggers alarms and notifications. The list of monitored websites is managed through a CRUD REST API backed by DynamoDB. Changes are deployed through a CI/CD pipeline with separate **Beta** and **Prod** environments, gated by an automated test suite.
 
 ## What it does
 
@@ -35,9 +35,9 @@ To set this up from scratch, see [Pipeline setup](#pipeline-setup) below.
 
 | Type | Count | What it checks | Runs |
 |------|-------|-----------------|------|
-| Unit | 12 | Individual functions in `monitor.py` and `alarm_logger.py`, with AWS calls mocked | Before Beta deploys |
-| Functional | 8 | The CDK stack synthesizes the correct resources (Lambda count, alarm thresholds, DynamoDB keys, etc.) using `aws_cdk.assertions` | Before Beta deploys |
-| Integration | 2 | The real, deployed Beta Lambda runs successfully and sends real metrics to CloudWatch | After Beta deploys, before Prod |
+| Unit | 14 | Individual functions in `monitor.py`, `alarm_logger.py`, and `targets_api.py`, with AWS calls mocked | Before Beta deploys |
+| Functional | 10 | The CDK stack synthesizes the correct resources (Lambda count, alarm thresholds, DynamoDB keys, API Gateway methods, etc.) using `aws_cdk.assertions` | Before Beta deploys |
+| Integration | 3 | The real, deployed Beta Lambda and API run successfully against real AWS services | After Beta deploys, before Prod |
 
 Run locally:
 ```bash
@@ -47,7 +47,24 @@ python -m pytest tests/unit tests/functional -v   # fast, no AWS needed
 python -m pytest tests/integration -v              # needs Beta deployed + AWS credentials
 ```
 
-## Operational health and automated rollback
+## CRUD API for website targets
+
+A RESTful API (API Gateway + Lambda + DynamoDB) manages the list of websites the monitor checks. See [API.md](API.md) for full documentation.
+
+| Operation | Method | Path |
+|-----------|--------|------|
+| Create | POST | `/targets` |
+| List | GET | `/targets` |
+| Update | PUT | `/targets/{name}` |
+| Delete | DELETE | `/targets/{name}` |
+
+The API URL is shown as a CloudFormation output (`TargetsApiEndpoint`) after each deployment:
+```bash
+aws cloudformation describe-stacks --stack-name Prod-ShubhamStack --region us-east-1 \
+  --query "Stacks[0].Outputs[?OutputKey=='TargetsApiEndpoint'].OutputValue" --output text
+```
+
+## Operational health monitoring
 
 In addition to monitoring the *websites being checked*, the stack monitors the **WebMonitor Lambda itself**:
 
@@ -58,11 +75,9 @@ In addition to monitoring the *websites being checked*, the stack monitors the *
 | Throttles | The function is throttled by Lambda's concurrency limits |
 | No invocations | The function hasn't run in 10 minutes (the schedule may be broken) |
 
-`WebMonitor` is deployed through a **Lambda alias** (`live`), managed by **AWS CodeDeploy**. Every pipeline deployment publishes a new Lambda version and shifts the alias to it. CodeDeploy watches the Duration, Errors and Throttles alarms during the deployment — if any of them trip, **the alias automatically rolls back to the previous working version**, with no manual action needed.
+**Note on automated rollback:** the project was designed to deploy `WebMonitor` through a versioned Lambda alias with AWS CodeDeploy, automatically rolling back to the previous version if the Duration, Errors, or Throttles alarms tripped during a deployment. The CDK code for this was implemented and validated locally (`cdk diff` succeeded cleanly), but the actual deployment failed because the AWS account does not have a CodeDeploy subscription enabled (`AccessDeniedException: ... needs a subscription for the service (Service: CodeDeploy)`) — an account-tier limitation, not a code or design issue. The rollback code was removed to keep the pipeline deployable; the operational alarms above remain active as alerting (not auto-rollback).
 
-The "No invocations" alarm is alert-only (not a rollback trigger), since a missed schedule isn't something a code rollback fixes.
-
-Lambda memory usage is visible per-invocation in the Lambda console's **Monitor** tab and in CloudWatch Logs, though it isn't exposed as a standard alarmable metric the way duration and errors are.
+Lambda memory usage is visible per-invocation in the Lambda console's **Monitor** tab and in CloudWatch Logs.
 
 ## Project structure
 
@@ -71,14 +86,16 @@ Lambda memory usage is visible per-invocation in the Lambda console's **Monitor*
 | `app.py` | Entry point for the CDK app — defines the pipeline stack |
 | `shubham/pipeline_stack.py` | Defines the CodePipeline: source, build, test gates, Beta and Prod stages |
 | `shubham/app_stage.py` | Wraps `ShubhamStack` so it can be deployed once per environment (Beta, Prod) |
-| `shubham/shubham_stack.py` | Defines the AWS resources (Lambdas, alias, CodeDeploy, schedule, dashboard, alarms, SNS, DynamoDB) |
+| `shubham/shubham_stack.py` | Defines the AWS resources (Lambdas, schedule, dashboard, alarms, SNS, DynamoDB, CRUD API) |
 | `lambda/hello.py` | Hello Lambda warm-up function |
 | `lambda/monitor.py` | Website monitor function |
 | `lambda/alarm_logger.py` | Saves alarm events into DynamoDB |
-| `lambda/websites.json` | List of websites to check |
-| `tests/unit/` | Unit tests (12) |
-| `tests/functional/` | Functional/infrastructure tests (8) |
-| `tests/integration/` | Integration tests against the deployed Beta environment (2) |
+| `lambda/targets_api.py` | CRUD handlers for the website target list |
+| `lambda/websites.json` | Default list of websites to check |
+| `tests/unit/` | Unit tests (14) |
+| `tests/functional/` | Functional/infrastructure tests (10) |
+| `tests/integration/` | Integration tests against the deployed Beta environment (3) |
+| `API.md` | CRUD API documentation |
 | `RUNBOOK.md` | What to do when an alarm fires |
 
 ## Prerequisites
@@ -192,10 +209,11 @@ The pipeline deploys the change to Beta, then Prod (after approval), and the das
 - [x] Alarm notifications (email through SNS)
 - [x] Alarm history logged in DynamoDB
 - [x] CI/CD pipeline with Beta and Prod stages
-- [x] Automated test suite (12 unit, 8 functional, 2 integration), enforced as pipeline blockers
+- [x] Automated test suite (14 unit, 10 functional, 3 integration), enforced as pipeline blockers
 - [x] Operational Lambda health alarms (duration, errors, throttles, invocations)
-- [x] Automated rollback via Lambda alias + CodeDeploy
-- [ ] CRUD API Gateway for the website target list
+- [ ] Automated rollback via Lambda alias + CodeDeploy — blocked by AWS account CodeDeploy subscription limitation (see Operational health monitoring)
+- [x] CRUD API Gateway for the website target list, backed by DynamoDB
+- [x] API documentation
 
 ## Runbook
 
@@ -226,6 +244,7 @@ cdk destroy WebHealthPipelineStack
 - Building a multi-stage CI/CD pipeline with AWS CDK Pipelines, including Beta, manual approval, and Prod
 - Writing unit, functional and integration tests with pytest and `aws_cdk.assertions`, and wiring them as blocking gates in a pipeline
 - Granting a CodeBuild step specific IAM permissions (`role_policy_statements`) to call AWS services it needs for integration testing
-- Deploying Lambda through a versioned alias with CodeDeploy, and using CloudWatch alarms to trigger automatic rollback
+- Building a RESTful CRUD API with API Gateway, Lambda and DynamoDB
+- Diagnosing an AWS account-level service restriction (CodeDeploy subscription) through CloudFormation error messages, and making a pragmatic engineering decision to descope under time pressure
 - Why CloudFormation resources with fixed names (like a dashboard name) collide across stacks, and how changing a construct's logical ID forces a clean replacement
 - Using Git and GitHub to version the project
