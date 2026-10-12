@@ -79,3 +79,22 @@ def test_sns_topic_is_created():
 def test_dashboard_is_created():
     template = _synthesized_template()
     template.resource_count_is("AWS::CloudWatch::Dashboard", 1)
+
+
+
+
+def test_targets_table_has_name_as_partition_key():
+    """The TargetsTable used by the CRUD API should be keyed by 'name'."""
+    template = _synthesized_template()
+    template.has_resource_properties("AWS::DynamoDB::Table", {
+        "KeySchema": Match.array_with([
+            {"AttributeName": "name", "KeyType": "HASH"},
+        ]),
+    })
+
+
+def test_targets_api_gateway_is_created():
+    """The CRUD API Gateway should exist with GET, POST, PUT, DELETE methods."""
+    template = _synthesized_template()
+    template.resource_count_is("AWS::ApiGateway::RestApi", 1)
+    template.resource_count_is("AWS::ApiGateway::Method", 4)
