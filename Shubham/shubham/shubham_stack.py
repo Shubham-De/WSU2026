@@ -118,7 +118,7 @@ class ShubhamStack(Stack):
         """
 
         dashboard = cloudwatch.Dashboard(
-            self, "WebHealthDashboard", dashboard_name=f"WebHealth-{Stack.of(self).stack_name}"
+            self, "WebHealthDashboardV2", dashboard_name=f"WebHealth-{Stack.of(self).stack_name}"
         )
         
         dashboard.add_widgets(
