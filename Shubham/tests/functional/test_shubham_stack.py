@@ -16,11 +16,11 @@ def _synthesized_template():
     return Template.from_stack(stack)
 
 
-def test_three_lambda_functions_are_created():
-    #HelloLambda, WebMonitor, AlarmLogger = 3 Lambda functions.
+def test_seven_lambda_functions_are_created():
 
+    #HelloLambda, WebMonitor, AlarmLogger, and 4 CRUD functions = 7 Lambda functions.
     template = _synthesized_template()
-    template.resource_count_is("AWS::Lambda::Function", 3)
+    template.resource_count_is("AWS::Lambda::Function", 7)
 
 
 def test_lambdas_use_python312_runtime():
