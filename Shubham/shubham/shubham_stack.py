@@ -110,9 +110,17 @@ class ShubhamStack(Stack):
             )
 
         # dashboard  two graphs side by side
+        
+        """
         dashboard = cloudwatch.Dashboard(
             self, "WebHealthDashboard", dashboard_name="WebHealth"
+        )  
+        """
+
+        dashboard = cloudwatch.Dashboard(
+            self, "WebHealthDashboard", dashboard_name=f"WebHealth-{Stack.of(self).stack_name}"
         )
+        
         dashboard.add_widgets(
             cloudwatch.GraphWidget(
                 title="Availability (1 = up, 0 = down)",
