@@ -16,6 +16,7 @@ from aws_cdk import (
     aws_sns as sns,
     aws_sns_subscriptions as subs,
     aws_dynamodb as dynamodb,
+    aws_codedeploy as codedeploy,
 
 )
 from constructs import Construct
@@ -53,12 +54,25 @@ class ShubhamStack(Stack):
             handler="monitor.handler",
             code=_lambda.Code.from_asset("lambda"),
             timeout=Duration.seconds(60),            # 60 bcz more website more time
+            current_version_options=_lambda.VersionOptions(removal_policy=RemovalPolicy.RETAIN,),
         )
 
         monitor.add_to_role_policy(iam.PolicyStatement(
             actions=["cloudwatch:PutMetricData"],
             resources=["*"],
         ))
+
+        # A new immutable version is published every deploy
+        monitor_version = monitor.current_version
+
+        # The alias is the stable name EventBridge actually calls — it points
+        # at whichever version is currently "live"
+
+        monitor_alias = _lambda.Alias(
+            self, "WebMonitorLiveAlias",
+            alias_name="live",
+            version=monitor_version,
+        )
 
 
         
@@ -68,7 +82,9 @@ class ShubhamStack(Stack):
             self, "MonitorSchedule",
             schedule=events.Schedule.rate(Duration.minutes(5)),
         )
-        rule.add_target(targets.LambdaFunction(monitor))
+
+        #rule.add_target(targets.LambdaFunction(monitor))
+        rule.add_target(targets.LambdaFunction(monitor_alias))
 
         topic = sns.Topic(self, "AlarmTopic", display_name="WebHealth Alarms")
         
@@ -185,6 +201,19 @@ class ShubhamStack(Stack):
                       webmonitor_throttles_alarm, webmonitor_invocations_alarm):
             alarm.add_alarm_action(cw_actions.SnsAction(topic))
             alarm.add_ok_action(cw_actions.SnsAction(topic))
+
+
+        # CodeDeploy deployment group  shifts traffic to the new version, watches these alarms, and rolls back automatically if any trip
+        deployment_group = codedeploy.LambdaDeploymentGroup(
+            self, "WebMonitorDeploymentGroup",
+            alias=monitor_alias,
+            deployment_config=codedeploy.LambdaDeploymentConfig.ALL_AT_ONCE,
+            alarms=[
+                webmonitor_duration_alarm,
+                webmonitor_errors_alarm,
+                webmonitor_throttles_alarm,
+            ],
+        )
 
 
 
